@@ -26,8 +26,8 @@ A **Área do Investidor da B3** já entrega esse histórico de graça, num Excel
 
 1. lê o extrato da B3 (ou o relatório de produtos do Itaú, para renda fixa e fundos);
 2. gera um JSON de lançamentos que você pode revisar e editar;
-3. transforma esse JSON em um único script, que você roda na aba do Investidor10 em que já está logado.
-   Todos os lançamentos são gravados de uma vez.
+3. compara esse JSON com o que já está na sua carteira e mostra o plano: criar, editar ou deixar igual;
+4. grava o plano aprovado de uma vez, na aba do Investidor10 em que você já está logado.
 
 Ele nunca pede sua senha nem guarda cookies: quem autentica é a sessão do seu navegador.
 
@@ -37,21 +37,25 @@ Ele nunca pede sua senha nem guarda cookies: quem autentica é a sessão do seu 
   A data de liquidação é convertida para o dia do pregão (D-2 úteis, pulando fins de semana e feriados da B3).
 - **Relatório "meus produtos" do Itaú**: CDB, Cofrinhos e fundos de investimento pelo saldo atual.
 - **Tipos suportados**: FIIs, ETFs, renda fixa pós-fixada (% do CDI) e fundos de investimento.
+- **Sincronização sem duplicar**: o `plan` reconhece o que já foi lançado. Rodar o mesmo extrato duas vezes
+  não cria nada novo, e uma compra lançada com data ou preço estimados vira uma *edição*.
+- **Nada é gravado sem plano**: `plan` só lê. `apply` grava exatamente o último plano mostrado.
+- **Editar, nunca apagar**: a CLI não exclui lançamentos. O que existe só na carteira é apenas informado.
 - **Cotação automática**: se o preço ficar `null`, usa a cotação que o próprio site sugere para a data.
-- **Seguro contra ambiguidade**: se a busca de um fundo retorna mais de um resultado, nada é gravado e os
-  candidatos voltam para você escolher.
-- **Editar em vez de apagar**: um item com `"id"` corrige um lançamento existente.
-- **`--dry-run`**: confere ativos, cotações e o payload exato antes de gravar.
-- **Só biblioteca padrão**: um único arquivo Python, sem `pip install`.
+- **Seguro contra ambiguidade**: se a busca de um fundo retorna mais de um resultado, ele fica fora do
+  plano e os candidatos voltam para você escolher.
+- **Barato para agentes**: a biblioteca é instalada uma vez na aba. Cada operação depois disso é uma
+  chamada de uma linha. Uma [skill](#usando-com-agentes-skill) pronta conduz o fluxo.
+- **Só biblioteca padrão**: um único arquivo Python, sem dependências.
 
 ## Instalação
 
 ```bash
-git clone https://github.com/mcsscalabrin/i10-cli.git
-cd i10-cli
-python i10.py --help
+pipx install git+https://github.com/mcsscalabrin/i10-cli   # cria o comando i10
+i10 --help
 ```
 
+Ou, sem instalar: `git clone https://github.com/mcsscalabrin/i10-cli.git` e `python i10-cli/i10.py --help`.
 Requer Python 3.9 ou superior. Nada mais.
 
 ## Início rápido
@@ -64,33 +68,27 @@ Requer Python 3.9 ou superior. Nada mais.
 
 ```bash
 export I10_WALLET=1234567          # PowerShell: $env:I10_WALLET = "1234567"
-python i10.py parse movimentacao-2026-10-28.xlsx -o lancamentos.json
+i10 parse movimentacao-2026-10-28.xlsx -o lancamentos.json
 ```
 
 **3. Revise** o `lancamentos.json`. É texto simples: ajuste, remova ou acrescente itens.
 
-**4. Teste sem gravar e depois grave.**
+**4. Instale a biblioteca na aba.** Abra a sua carteira no Investidor10, abra o DevTools (F12) e vá em
+Console. Cole a saída de `i10 install` e pressione Enter. Repita só se a aba recarregar.
 
-```bash
-python i10.py js lancamentos.json --dry-run -o dry.js
-python i10.py js lancamentos.json -o run.js
-```
-
-**5. Rode o script** na aba da sua carteira no Investidor10: abra o DevTools (F12), vá em Console, cole o
-conteúdo de `run.js` e pressione Enter. A resposta é um JSON curto, com um resultado por lançamento:
+**5. Veja o plano.** Cole a saída de `i10 plan lancamentos.json`. Nada é gravado nesta etapa:
 
 ```json
-[{"ok":"XPML11 3x105.2 2026-06-01"},{"ok":"BOVA11 2x128.4 2026-07-27"}]
+{"criar":["BUY XPML11 3x105.2 2026-06-01"],
+ "editar":["BUY BOVA11 2x128.4 2026-07-27 (era 2x127.9 2026-07-15)"],
+ "iguais":5, "extras":[], "erros":[],
+ "resumo":"1 criar, 1 editar, 5 iguais, 0 so na carteira, 0 erros -> rode i10 apply"}
 ```
 
-**6. Confira** a carteira:
+**6. Grave** colando a saída de `i10 apply`, e **confira** com `i10 positions` (tipo, ativo, quantidade,
+preço médio, total).
 
-```bash
-python i10.py positions     # gera o script que lista: tipo, ativo, quantidade, preço médio, total
-```
-
-> Também funciona com agentes que controlam o navegador (por exemplo, Claude in Chrome). O agente executa
-> o script inteiro numa única chamada, em vez de preencher dezenas de formulários.
+> Prefere colar uma vez só? `--standalone` inclui a biblioteca no próprio snippet do `plan`.
 
 ## Formato dos lançamentos
 
@@ -109,7 +107,7 @@ python i10.py positions     # gera o script que lista: tipo, ativo, quantidade, 
 
 | `kind` | Campos | Observações |
 |---|---|---|
-| `ticker` | `type` (`Fii`, `Etf`), `symbol`, `qty`, `date`, `price` | `price: null` usa a cotação do site. `"side": "SELL"` lança venda. `"id"` edita um lançamento existente. |
+| `ticker` | `type` (`Fii`, `Etf`), `symbol`, `qty`, `date`, `price` | `price: null` usa a cotação do site. `"side": "SELL"` lança venda. `"id"` força a edição daquele lançamento. |
 | `fixed` | `emitter`, `title` (`CDB`, `LCI`…), `indexer`, `pct`, `value`, `date`, `daily`, `due` | Pós-fixado. `due: null` com `daily: true` = sem vencimento. |
 | `fund` | `search`, `value`, `date`, `pick` (opcional) | `pick` é o id ou um trecho do nome do fundo, para resolver ambiguidades. |
 
@@ -120,23 +118,42 @@ Há um exemplo completo em [`examples/lancamentos.exemplo.json`](examples/lancam
 | Comando | O que faz |
 |---|---|
 | `parse <arquivos…> [-o arq]` | Extrato de movimentação da B3 e/ou relatório Itaú → JSON de lançamentos |
-| `js <arq> [--dry-run] [-o arq]` | JSON → script que grava (ou só simula) os lançamentos |
-| `search <tipo> <termo>` | Script que busca ativos (`Fund`, `Fii`, `Etf`) |
-| `quote <tipo> <id> [data]` | Script que consulta a cotação sugerida numa data |
-| `positions [tipos…]` | Script que lista as posições da carteira |
-| `entries [grupos…]` | Script que lista os lançamentos com id (para editar) |
+| `install` | Biblioteca `window.i10` para a aba (uma vez por carregamento) |
+| `plan <arq>` | Compara o JSON com a carteira: criar / editar / igual / só na carteira. Não grava. |
+| `apply` | Grava o último plano daquela aba (expira em 30 min) |
+| `search <tipo> <termo>` | Busca ativos (`Fund`, `Fii`, `Etf`) |
+| `quote <tipo> <id> [data]` | Cotação sugerida pelo site numa data |
+| `positions [tipos…]` | Posições da carteira |
+| `entries` | Lançamentos com id, tipo, lado, ativo, quantidade, preço e data |
+
+Todos, exceto `parse`, geram JavaScript e aceitam `-o <arquivo>` e `--standalone`.
+
+## Usando com agentes (skill)
+
+[`skills/i10/SKILL.md`](skills/i10/SKILL.md) ensina um agente (por exemplo, Claude Code com Claude in
+Chrome) a conduzir o fluxo inteiro:
+
+1. pedir o extrato certo, inclusive avisando sobre o período padrão de um mês da B3;
+2. rodar `parse`, instalar a biblioteca na aba e mostrar o `plan`;
+3. pedir sua confirmação antes do `apply`;
+4. conferir as posições no final.
+
+Para instalar a skill no Claude Code, copie a pasta para o seu diretório de skills:
+
+```bash
+cp -r skills/i10 ~/.claude/skills/        # PowerShell: Copy-Item -Recurse skills\i10 $HOME\.claude\skills\
+```
 
 ## Como funciona
 
 ```text
  Extrato B3 (.xlsx) ─┐
-                     ├─► i10 parse ─► lancamentos.json ─► i10 js ─► run.js
- Relatório Itaú ─────┘                (você revisa)                    │
-                                                                       ▼
-                                  aba logada do Investidor10 ── fetch ──► API interna da carteira
-                                                                       │
-                                                                       ▼
-                                                     [{"ok": …}, {"erro": …, "candidatos": […]}]
+                     ├─► i10 parse ─► lancamentos.json ─► i10 plan ──┐
+ Relatório Itaú ─────┘                (você revisa)                  │
+                                                                     ▼
+                     aba logada do Investidor10:  window.i10  (i10 install, uma vez)
+                       plan  → lê a carteira e compara → {criar, editar, iguais, extras, erros}
+                       apply → grava só o último plano  → [{"ok": …}, {"erro": …}]
 ```
 
 O script usa os mesmos endpoints que o formulário "Adicionar Lançamento" do site chama
@@ -154,11 +171,13 @@ própria sessão. Nenhum dado sai do seu computador para terceiros.
 - **API não documentada.** Os endpoints foram observados no próprio site e podem mudar sem aviso.
 - **Testado com** FIIs, ETFs, CDB pós-fixado e fundos de investimento. Ações, BDRs, vendas, renda fixa
   prefixada e Tesouro Direto ainda não foram validados. Pull requests são bem-vindos.
-- **Feriados móveis** (Carnaval, Sexta-feira Santa, Corpus Christi) estão cadastrados só para 2026 e 2027.
-  Para compras em outros anos perto dessas datas, confira o dia do pregão.
+- **Calendário da B3:** inclui feriados nacionais e móveis de qualquer ano. Feriados municipais de São
+  Paulo só fecharam a bolsa até 2021, então compras antigas perto de 25/01 ou 09/07 podem sair com o
+  pregão deslocado em um dia.
+- **Comparação:** o plano casa lançamentos por ativo, lado e quantidade. Dois lotes iguais do mesmo ativo com datas
+  trocadas podem ser casados ao contrário. Confira a lista de *editar* antes do `apply`.
 - **Renda fixa e fundos do Itaú** entram pelo saldo atual, porque o extrato de movimentação da B3 não traz
   essas aplicações.
-- **Rodar o mesmo JSON duas vezes duplica os lançamentos.** Use `entries` para conferir antes.
 
 ## Aviso legal
 

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "i10-cli"
+version = "0.2.0"
+description = "Lançamentos em lote na carteira do Investidor10 a partir do extrato gratuito da B3 (não oficial)"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+keywords = ["investidor10", "b3", "investimentos", "fii", "etf", "cli"]
+classifiers = [
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Natural Language :: Portuguese (Brazilian)",
+  "Programming Language :: Python :: 3",
+  "Topic :: Office/Business :: Financial :: Investment",
+]
+
+[project.urls]
+Homepage = "https://github.com/mcsscalabrin/i10-cli"
+
+[project.scripts]
+i10 = "i10:main"
+
+[tool.setuptools]
+py-modules = ["i10"]
