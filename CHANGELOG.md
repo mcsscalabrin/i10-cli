@@ -11,6 +11,10 @@
   `i10 formats` lista os disponíveis. O relatório do Itaú passa a ser um importador opcional como
   qualquer outro.
 - `parse` aceita vários arquivos e formatos misturados numa mesma execução.
+- **Resgate de fundo**: `"side": "SELL"` em `fund`. Com `"qty": "all"`, vende todas as cotas da carteira
+  (sem resto de cotas). Com `"value"`, o preço da cota passa a ser o valor efetivamente resgatado
+  dividido pela quantidade. Validado no site.
+- **Edição de renda fixa** por `"id"`: validada no site. O payload é o da criação, com o `id`.
 
 ### Mudado
 - Documentação e skill não tratam mais nenhum banco como padrão. A skill pergunta de onde vêm os dados
