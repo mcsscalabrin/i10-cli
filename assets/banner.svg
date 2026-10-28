@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="i10-cli: do extrato da B3 para a sua carteira no Investidor10, com datas e preços reais, numa única execução.">
+  <style>
+    .mono{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    .sans{font-family:Inter,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}
+  </style>
+  <rect width="1280" height="640" fill="#111413"/>
+  <g transform="translate(96 88) scale(1.1667)">
+    <rect width="96" height="96" rx="22" fill="#1B201E" stroke="#2A312E" stroke-width="2"/>
+    <path d="M22 30 L40 48 L22 66" fill="none" stroke="#F4F2EC" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="50" y="56" width="8" height="12" rx="2" fill="#1FA463"/>
+    <rect x="62" y="46" width="8" height="22" rx="2" fill="#1FA463"/>
+    <rect x="74" y="32" width="8" height="36" rx="2" fill="#1FA463"/>
+  </g>
+  <text x="236" y="152" class="mono" font-size="72" font-weight="700" letter-spacing="-2" fill="#F4F2EC">i10-cli</text>
+  <text x="238" y="192" class="mono" font-size="20" fill="#9AA39F">carteira Investidor10 · extrato B3 · em lote</text>
+  <text class="sans" font-size="40" font-weight="500" fill="#F4F2EC">
+    <tspan x="96" y="330">Do extrato da B3 para a sua carteira no Investidor10,</tspan>
+    <tspan x="96" y="380">com datas e preços reais, numa única execução.</tspan>
+  </text>
+  <rect x="96" y="446" width="620" height="106" rx="14" fill="#1B201E" stroke="#2A312E" stroke-width="2"/>
+  <text x="124" y="490" class="mono" font-size="22"><tspan fill="#9AA39F">$</tspan><tspan fill="#F4F2EC"> python i10.py parse movimentacao.xlsx</tspan></text>
+  <text x="124" y="526" class="mono" font-size="22"><tspan fill="#1FA463">ok</tspan><tspan fill="#C9CFCB"> 7 lançamentos → b3.json</tspan></text>
+  <text x="1184" y="546" class="sans" font-size="18" fill="#9AA39F" text-anchor="end">Projeto não oficial · MIT</text>
+</svg>

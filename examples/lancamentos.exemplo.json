@@ -1,0 +1,9 @@
+{
+  "wallet": 1234567,
+  "entries": [
+    {"kind": "ticker", "type": "Fii", "symbol": "XPML11", "qty": 3, "date": "2026-06-01", "price": 105.20},
+    {"kind": "ticker", "type": "Etf", "symbol": "BOVA11", "qty": 2, "date": "2026-07-27", "price": null},
+    {"kind": "fixed", "emitter": "Banco X", "title": "CDB", "indexer": "CDI", "pct": 102, "value": 1000.00, "date": "2026-08-10", "daily": true, "due": null},
+    {"kind": "fund", "search": "GLOBAL DINAMICO RF LP", "value": 500.00, "date": "2026-09-01"}
+  ]
+}

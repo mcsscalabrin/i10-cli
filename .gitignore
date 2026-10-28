@@ -1,0 +1,15 @@
+# Seus dados financeiros nunca devem ir para o repositório
+*.xlsx
+*.xls
+*.pdf
+*.csv
+lancamentos*.json
+b3*.json
+!examples/*.json
+
+# Snippets gerados
+*.js
+
+__pycache__/
+*.pyc
+.venv/
