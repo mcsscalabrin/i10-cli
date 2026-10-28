@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.0
+
+### Novo
+- **Independente do banco**: a planilha modelo (`i10 template`, CSV ou XLSX) importa FIIs, ETFs, renda
+  fixa pós-fixada em % do CDI (CDB, LCI, LCA, LC, LF, RDB, debênture, CRI, CRA) e fundos de qualquer
+  banco ou corretora. Aceita `;` ou `,`, vírgula ou ponto decimal, datas `DD/MM/AAAA` ou `AAAA-MM-DD`.
+  Linhas inválidas são listadas com número e motivo, e nunca entram em silêncio.
+- **Importadores registrados** (`IMPORTERS`): cada formato é reconhecido pelo cabeçalho.
+  `i10 formats` lista os disponíveis. O relatório do Itaú passa a ser um importador opcional como
+  qualquer outro.
+- `parse` aceita vários arquivos e formatos misturados numa mesma execução.
+
+### Mudado
+- Documentação e skill não tratam mais nenhum banco como padrão. A skill pergunta de onde vêm os dados
+  e usa a planilha modelo para renda fixa e fundos.
+- Skill: `python -m i10` como alternativa quando o comando não está no PATH.
+
 ## 0.2.0
 
 ### Novo

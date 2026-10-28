@@ -1,0 +1,6 @@
+﻿tipo;ativo;data;quantidade;preco;valor;emissor;indexador;taxa;liquidez_diaria;vencimento;lado
+FII;XPML11;01/06/2026;3;105,20;;;;;;;compra
+ETF;BOVA11;27/07/2026;2;;;;;;;;compra
+CDB;;10/08/2026;;;1.000,00;Banco X;CDI;102;sim;;
+LCI;;15/08/2026;;;5.000,00;Banco Y;CDI;95;nao;15/08/2028;
+FUNDO;GLOBAL DINAMICO RF LP;01/09/2026;;;500,00;;;;;;

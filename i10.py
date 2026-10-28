@@ -12,7 +12,9 @@ Fluxo:
   i10 apply                   executa o ultimo plano daquela aba
 
 Comandos:
-  parse  <arquivos...> [-o lancamentos.json]   extrato B3 / relatorio Itau -> JSON
+  parse  <arquivos...> [-o lancamentos.json]   extrato B3 / planilha modelo / relatorios -> JSON
+  template [-o modelo.csv] [--examples]        planilha modelo para qualquer banco/corretora
+  formats                                      formatos que o parse reconhece
   install                                      biblioteca window.i10
   plan   <lancamentos.json>                    planeja a sincronizacao (somente leitura)
   apply                                        grava o ultimo plano
@@ -53,7 +55,7 @@ import xml.etree.ElementTree as ET
 from datetime import date, timedelta
 from pathlib import Path
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 API = "/wallet/api/proxy/wallet-app"
 
@@ -112,10 +114,10 @@ def _norm(s):
 
 
 def parse_itau_produtos(rows, on_date):
-    """Aba 'produtos-contratados' do relatorio Itau -> renda fixa e fundos pelo saldo.
+    """Importador especifico: aba 'produtos-contratados' do relatorio do Itau -> renda fixa e fundos pelo saldo.
 
     Acoes, ETFs e FIIs ficam de fora: o extrato de movimentacao da B3 traz esses
-    com data e preco reais.
+    com data e preco reais. Outros bancos: use a planilha modelo (i10 template).
     """
     entries, skipped = [], []
     for r in rows[1:]:
@@ -209,20 +211,155 @@ def parse_b3_movimentacao(rows):
     return entries, skipped
 
 
+# Planilha modelo: o formato universal, para qualquer banco ou corretora.
+TEMPLATE_COLUMNS = ["tipo", "ativo", "data", "quantidade", "preco", "valor", "emissor", "indexador",
+                    "taxa", "liquidez_diaria", "vencimento", "lado"]
+TEMPLATE_EXAMPLES = [
+    ["FII", "XPML11", "01/06/2026", "3", "105,20", "", "", "", "", "", "", "compra"],
+    ["ETF", "BOVA11", "27/07/2026", "2", "", "", "", "", "", "", "", "compra"],
+    ["CDB", "", "10/08/2026", "", "", "1.000,00", "Banco X", "CDI", "102", "sim", "", ""],
+    ["LCI", "", "15/08/2026", "", "", "5.000,00", "Banco Y", "CDI", "95", "nao", "15/08/2028", ""],
+    ["FUNDO", "GLOBAL DINAMICO RF LP", "01/09/2026", "", "", "500,00", "", "", "", "", "", ""],
+]
+# Titulos de renda fixa que o formulario do Investidor10 oferece (rotulos exatos do site).
+FIXED_TITLES = {"CDB": "CDB", "LCI": "LCI", "LCA": "LCA", "LC": "LC", "LF": "LF", "RDB": "RDB",
+                "DEBENTURE": "Debênture", "CRI": "CRI", "CRA": "CRA"}
+_YES = {"S", "SIM", "Y", "YES", "TRUE", "1", "X"}
+
+
+def _num(s):
+    """'1.234,56', '1234.56', 'R$ 1.000,00' -> float. Vazio -> None."""
+    s = str(s or "").replace("R$", "").replace(" ", "").strip()
+    if not s:
+        return None
+    if "," in s:
+        s = s.replace(".", "").replace(",", ".")
+    return float(s)
+
+
+def _iso_date(s):
+    s = str(s or "").strip()
+    m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", s)
+    y, mo, d = (m[1], m[2], m[3]) if m else (None, None, None)
+    if not m:
+        m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", s)
+        if m:
+            y, mo, d = m[3], m[2], m[1]
+    try:
+        return date(int(y), int(mo), int(d)).isoformat()
+    except (TypeError, ValueError):
+        raise ValueError(f"data invalida '{s}' (use DD/MM/AAAA ou AAAA-MM-DD)") from None
+
+
+def parse_template(rows):
+    """Planilha modelo (i10 template) -> lancamentos. Uma linha por compra, venda ou aplicacao."""
+    entries, skipped = [], []
+    hdr = [_norm(h).lower() for h in rows[0]]
+    for n, r in enumerate(rows[1:], start=2):
+        row = {h: (r[i].strip() if i < len(r) else "") for i, h in enumerate(hdr)}
+        if not any(row.values()):
+            continue
+        tipo = _norm(row.get("tipo"))
+        try:
+            when = _iso_date(row.get("data"))
+            if tipo in ("FII", "ETF"):
+                if not row.get("ativo") or _num(row.get("quantidade")) is None:
+                    raise ValueError("FII/ETF precisa de ativo e quantidade")
+                e = {"kind": "ticker", "type": tipo.title(), "symbol": _norm(row["ativo"]),
+                     "qty": _num(row["quantidade"]), "date": when, "price": _num(row.get("preco"))}
+                if _norm(row.get("lado")).startswith("V"):
+                    e["side"] = "SELL"
+            elif tipo == "FUNDO":
+                if not row.get("ativo") or _num(row.get("valor")) is None:
+                    raise ValueError("FUNDO precisa de ativo (nome para busca) e valor")
+                e = {"kind": "fund", "search": row["ativo"], "value": _num(row["valor"]), "date": when}
+            elif tipo in FIXED_TITLES:
+                indexer = _norm(row.get("indexador")) or "CDI"
+                if indexer != "CDI":
+                    raise ValueError(f"indexador {indexer} ainda nao suportado (so pos-fixado em % do CDI)")
+                if not row.get("emissor") or _num(row.get("valor")) is None or _num(row.get("taxa")) is None:
+                    raise ValueError(f"{tipo} precisa de emissor, valor e taxa (% do CDI)")
+                daily = _norm(row.get("liquidez_diaria")) in _YES
+                due = _iso_date(row["vencimento"]) if row.get("vencimento") else None
+                if not daily and not due:
+                    raise ValueError("sem liquidez diaria, informe o vencimento")
+                e = {"kind": "fixed", "emitter": row["emissor"], "title": FIXED_TITLES[tipo], "indexer": "CDI",
+                     "pct": _num(row["taxa"]), "value": _num(row["valor"]), "date": when, "daily": daily, "due": due}
+            else:
+                raise ValueError(f"tipo '{row.get('tipo')}' desconhecido (use FII, ETF, FUNDO ou {', '.join(FIXED_TITLES)})")
+        except ValueError as err:
+            skipped.append(f"linha {n}: {err}")
+            continue
+        entries.append(e)
+    return entries, skipped
+
+
+def read_csv(path):
+    import csv
+    raw = Path(path).read_bytes()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1252")
+    try:
+        dialect = csv.Sniffer().sniff(text.splitlines()[0], delimiters=";,\t")
+    except csv.Error:
+        dialect = csv.excel
+    return [r for r in csv.reader(text.splitlines(), dialect)]
+
+
+def _header(rows):
+    return {_norm(h) for h in (rows[0] if rows else [])}
+
+
+# Importadores, testados em ordem: (nome, descricao, detecta(abas) -> linhas ou None, parse(linhas, data)).
+IMPORTERS = [
+    ("b3-movimentacao",
+     "Area do Investidor B3 > Extratos > Movimentacao (qualquer banco/corretora): FIIs e ETFs com data e preco reais",
+     lambda sheets: next((r for r in sheets.values() if {"MOVIMENTACAO", "PRODUTO"} <= _header(r)), None),
+     lambda rows, on_date: parse_b3_movimentacao(rows)),
+    ("modelo",
+     "Planilha modelo do i10 (i10 template), CSV ou XLSX: FIIs, ETFs, renda fixa pos-CDI e fundos de qualquer banco",
+     lambda sheets: next((r for r in sheets.values() if {"TIPO", "DATA", "VALOR"} <= _header(r)), None),
+     lambda rows, on_date: parse_template(rows)),
+    ("itau-produtos",
+     "Itau > relatorio 'meus produtos' (.xlsx): renda fixa e fundos pelo saldo na data de --date",
+     lambda sheets: sheets.get("produtos-contratados"),
+     parse_itau_produtos),
+]
+
+
 def parse_files(paths, on_date):
     entries, skipped = [], []
     for p in paths:
-        sheets = read_xlsx(p) if str(p).lower().endswith(".xlsx") else {}
-        first = next(iter(sheets.values()), [[]])
-        if "produtos-contratados" in sheets:
-            e, s = parse_itau_produtos(sheets["produtos-contratados"], on_date)
-        elif first and "MOVIMENTACAO" in [_norm(h) for h in first[0]]:
-            e, s = parse_b3_movimentacao(first)
+        low = str(p).lower()
+        sheets = read_xlsx(p) if low.endswith(".xlsx") else {"csv": read_csv(p)} if low.endswith(".csv") else {}
+        for name, _desc, detect, parse in IMPORTERS:
+            rows = detect(sheets)
+            if rows:
+                e, s = parse(rows, on_date)
+                entries += e
+                skipped += [f"{Path(p).name}: {x}" for x in s]
+                break
         else:
-            e, s = [], [f"{Path(p).name}: formato nao suportado (ignorado)"]
-        entries += e
-        skipped += s
+            skipped.append(f"{Path(p).name}: formato nao reconhecido (veja i10 formats; use i10 template)")
+    entries.sort(key=lambda e: e["date"])
     return entries, skipped
+
+
+def cmd_formats(a):
+    for name, desc, _d, _p in IMPORTERS:
+        print(f"{name:16} {desc}")
+
+
+def cmd_template(a):
+    import csv
+    with open(a.out, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(TEMPLATE_COLUMNS)
+        if a.examples:
+            w.writerows(TEMPLATE_EXAMPLES)
+    print(f"modelo -> {a.out}" + (" (com exemplos ficticios: apague antes de usar)" if a.examples else ""))
 
 
 def cmd_parse(a):
@@ -509,7 +646,15 @@ def main(argv=None):
     p.add_argument("--version", action="version", version=f"i10 {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("parse", help="extrato B3 / relatorio Itau -> JSON de lancamentos")
+    s = sub.add_parser("formats", help="lista os formatos de arquivo que o parse reconhece")
+    s.set_defaults(fn=cmd_formats)
+
+    s = sub.add_parser("template", help="cria a planilha modelo (CSV) para qualquer banco ou corretora")
+    s.add_argument("-o", "--out", default="modelo-i10.csv")
+    s.add_argument("--examples", action="store_true", help="inclui linhas de exemplo ficticias")
+    s.set_defaults(fn=cmd_template)
+
+    s = sub.add_parser("parse", help="extrato B3 / planilha modelo / relatorios suportados -> JSON de lancamentos")
     s.add_argument("files", nargs="+")
     s.add_argument("-o", "--out", default="lancamentos.json")
     _wallet_arg(s)

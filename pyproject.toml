@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "i10-cli"
-version = "0.2.0"
+version = "0.3.0"
 description = "Lançamentos em lote na carteira do Investidor10 a partir do extrato gratuito da B3 (não oficial)"
 readme = "README.md"
 license = {text = "MIT"}
