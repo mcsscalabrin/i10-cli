@@ -13,3 +13,4 @@ b3*.json
 __pycache__/
 *.pyc
 .venv/
+!examples/*.csv

@@ -24,7 +24,8 @@ data, quantidade e preço, um formulário por vez.
 
 A **Área do Investidor da B3** já entrega esse histórico de graça, num Excel. O `i10-cli` faz a ponte:
 
-1. lê o extrato da B3 (ou o relatório de produtos do Itaú, para renda fixa e fundos);
+1. lê o extrato da B3, que vale para qualquer banco ou corretora. Para renda fixa e fundos, lê a
+   [planilha modelo](#planilha-modelo-qualquer-banco) ou um relatório de banco suportado;
 2. gera um JSON de lançamentos que você pode revisar e editar;
 3. compara esse JSON com o que já está na sua carteira e mostra o plano: criar, editar ou deixar igual;
 4. grava o plano aprovado de uma vez, na aba do Investidor10 em que você já está logado.
@@ -35,7 +36,12 @@ Ele nunca pede sua senha nem guarda cookies: quem autentica é a sessão do seu 
 
 - **Extrato de movimentação da B3**: as compras e vendas ("Transferência - Liquidação") viram lançamentos.
   A data de liquidação é convertida para o dia do pregão (D-2 úteis, pulando fins de semana e feriados da B3).
-- **Relatório "meus produtos" do Itaú**: CDB, Cofrinhos e fundos de investimento pelo saldo atual.
+- **Planilha modelo, para qualquer banco**: CDB, LCI, LCA e outros títulos pós-fixados em % do CDI,
+  fundos, FIIs e ETFs, numa planilha simples (CSV ou XLSX, com vírgula decimal ou ponto) que você
+  preenche com os dados do seu banco. Gere com `i10 template`.
+- **Importadores por formato**: o arquivo é reconhecido pelo cabeçalho (`i10 formats` lista os
+  suportados). Relatórios específicos de bancos, hoje só o "meus produtos" do Itaú, entram como
+  importadores opcionais, e adicionar outro banco é uma função.
 - **Tipos suportados**: FIIs, ETFs, renda fixa pós-fixada (% do CDI) e fundos de investimento.
 - **Sincronização sem duplicar**: o `plan` reconhece o que já foi lançado. Rodar o mesmo extrato duas vezes
   não cria nada novo, e uma compra lançada com data ou preço estimados vira uma *edição*.
@@ -113,11 +119,51 @@ preço médio, total).
 
 Há um exemplo completo em [`examples/lancamentos.exemplo.json`](examples/lancamentos.exemplo.json).
 
+## Formatos de entrada
+
+| Formato (`i10 formats`) | De onde vem | O que traz |
+|---|---|---|
+| `b3-movimentacao` | Área do Investidor B3 → Extratos → Movimentação (.xlsx) | FIIs e ETFs de **qualquer banco ou corretora**, com data do pregão e preço reais |
+| `modelo` | Planilha modelo do i10, preenchida por você (.csv ou .xlsx) | FIIs, ETFs, renda fixa pós-fixada (% do CDI) e fundos de **qualquer banco** |
+| `itau-produtos` | Itaú → relatório "meus produtos" (.xlsx) | Renda fixa e fundos do Itaú, pelo saldo na data de `--date` |
+
+Você pode passar vários arquivos de uma vez: `i10 parse movimentacao.xlsx minha-renda-fixa.csv`.
+
+### Planilha modelo (qualquer banco)
+
+```bash
+i10 template -o minha-carteira.csv              # só o cabeçalho
+i10 template --examples -o exemplo.csv          # com linhas de exemplo fictícias
+```
+
+Uma linha por compra, venda ou aplicação. Separador `;` ou `,`, números como `1.234,56` ou `1234.56`,
+datas como `DD/MM/AAAA` ou `AAAA-MM-DD`:
+
+| tipo | ativo | data | quantidade | preco | valor | emissor | indexador | taxa | liquidez_diaria | vencimento | lado |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| FII | XPML11 | 01/06/2026 | 3 | 105,20 | | | | | | | compra |
+| ETF | BOVA11 | 27/07/2026 | 2 | *(vazio = cotação do dia)* | | | | | | | compra |
+| CDB | | 10/08/2026 | | | 1.000,00 | Banco X | CDI | 102 | sim | | |
+| LCI | | 15/08/2026 | | | 5.000,00 | Banco Y | CDI | 95 | nao | 15/08/2028 | |
+| FUNDO | GLOBAL DINAMICO RF LP | 01/09/2026 | | | 500,00 | | | | | | |
+
+- `tipo`: `FII`, `ETF`, `FUNDO` ou um título de renda fixa (`CDB`, `LCI`, `LCA`, `LC`, `LF`, `RDB`,
+  `DEBENTURE`, `CRI`, `CRA`).
+- **Renda fixa:** `emissor`, `valor` e `taxa` (% do CDI) são obrigatórios. Sem liquidez diária, informe
+  também o `vencimento`.
+- **Fundos:** `ativo` é o termo de busca do fundo no site. Se a busca for ambígua, o `plan` devolve os
+  candidatos, e você coloca o id escolhido em `"pick"` no JSON.
+- **Linhas inválidas** são listadas com o número da linha e o motivo, e não entram no JSON.
+
+Exemplo pronto: [`examples/modelo-exemplo.csv`](examples/modelo-exemplo.csv).
+
 ## Comandos
 
 | Comando | O que faz |
 |---|---|
-| `parse <arquivos…> [-o arq]` | Extrato de movimentação da B3 e/ou relatório Itaú → JSON de lançamentos |
+| `parse <arquivos…> [-o arq]` | Extrato da B3, planilha modelo ou relatório suportado → JSON de lançamentos |
+| `template [-o arq] [--examples]` | Cria a planilha modelo para qualquer banco ou corretora |
+| `formats` | Lista os formatos de arquivo reconhecidos |
 | `install` | Biblioteca `window.i10` para a aba (uma vez por carregamento) |
 | `plan <arq>` | Compara o JSON com a carteira: criar / editar / igual / só na carteira. Não grava. |
 | `apply` | Grava o último plano daquela aba (expira em 30 min) |
@@ -126,7 +172,7 @@ Há um exemplo completo em [`examples/lancamentos.exemplo.json`](examples/lancam
 | `positions [tipos…]` | Posições da carteira |
 | `entries` | Lançamentos com id, tipo, lado, ativo, quantidade, preço e data |
 
-Todos, exceto `parse`, geram JavaScript e aceitam `-o <arquivo>` e `--standalone`.
+Todos, exceto `parse`, `template` e `formats`, geram JavaScript e aceitam `-o <arquivo>` e `--standalone`.
 
 ## Usando com agentes (skill)
 
@@ -149,7 +195,7 @@ cp -r skills/i10 ~/.claude/skills/        # PowerShell: Copy-Item -Recurse skill
 ```text
  Extrato B3 (.xlsx) ─┐
                      ├─► i10 parse ─► lancamentos.json ─► i10 plan ──┐
- Relatório Itaú ─────┘                (você revisa)                  │
+ Planilha modelo ────┘                (você revisa)                  │
                                                                      ▼
                      aba logada do Investidor10:  window.i10  (i10 install, uma vez)
                        plan  → lê a carteira e compara → {criar, editar, iguais, extras, erros}
@@ -176,19 +222,24 @@ própria sessão. Nenhum dado sai do seu computador para terceiros.
   pregão deslocado em um dia.
 - **Comparação:** o plano casa lançamentos por ativo, lado e quantidade. Dois lotes iguais do mesmo ativo com datas
   trocadas podem ser casados ao contrário. Confira a lista de *editar* antes do `apply`.
-- **Renda fixa e fundos do Itaú** entram pelo saldo atual, porque o extrato de movimentação da B3 não traz
-  essas aplicações.
+- **Renda fixa e fundos** não aparecem no extrato de movimentação da B3. Use a planilha modelo, com as
+  datas reais das aplicações, ou um relatório de banco suportado, que lança pelo saldo.
+- **Renda fixa:** só pós-fixada em % do CDI. Prefixados e IPCA+ ainda não são suportados e são recusados
+  com aviso. Dos títulos, só **CDB** foi validado no site. Os demais usam o rótulo que o formulário do
+  site mostra, mas ainda não foram testados.
 
 ## Aviso legal
 
-Projeto independente e **não oficial**, sem qualquer vínculo com Investidor10, B3 ou Itaú Unibanco.
+Projeto independente e **não oficial**, sem qualquer vínculo com o Investidor10, a B3 ou qualquer banco
+ou corretora.
 Use por sua conta e risco, respeitando os termos de uso de cada serviço. Não é recomendação de investimento.
 
 ## Contribuindo
 
 Issues e pull requests são bem-vindos, principalmente para:
 
-- novos formatos de extrato (outras corretoras, notas de corretagem);
+- importadores para relatórios de outros bancos e corretoras: uma função `parse_<banco>(linhas, data)` e
+  uma entrada em `IMPORTERS`, com um teste usando planilha sintética, nunca dados reais;
 - novos tipos de ativo (ações, BDRs, Tesouro Direto);
 - calendário de feriados da B3 para outros anos.
 

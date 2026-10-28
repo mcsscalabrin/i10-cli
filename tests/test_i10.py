@@ -89,6 +89,74 @@ class ParseItau(unittest.TestCase):
         self.assertEqual(len(skipped), 1)
 
 
+class Template(unittest.TestCase):
+    def parse_csv(self, text):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "carteira.csv")
+            Path(p).write_text(text, encoding="utf-8")
+            return i10.parse_files([p], "2026-10-28")
+
+    def test_csv_semicolon_and_decimal_comma(self):
+        entries, skipped = self.parse_csv(
+            "tipo;ativo;data;quantidade;preco;valor;emissor;indexador;taxa;liquidez_diaria;vencimento;lado\n"
+            "FII;xpml11;01/06/2026;3;105,20;;;;;;;compra\n"
+            "ETF;BOVA11;2026-07-27;2;;;;;;;;venda\n"
+            "CDB;;10/08/2026;;;1.000,50;Banco X;CDI;102;sim;;\n"
+            "LCI;;15/08/2026;;;5.000,00;Banco Y;;95;nao;15/08/2028;\n"
+            "FUNDO;GLOBAL DINAMICO RF LP;01/09/2026;;;500,00;;;;;;\n")
+        self.assertEqual(skipped, [])
+        self.assertEqual(entries[0], {"kind": "ticker", "type": "Fii", "symbol": "XPML11", "qty": 3.0,
+                                      "date": "2026-06-01", "price": 105.2})
+        self.assertEqual(entries[1]["side"], "SELL")
+        self.assertIsNone(entries[1]["price"])
+        self.assertEqual(entries[2], {"kind": "fixed", "emitter": "Banco X", "title": "CDB", "indexer": "CDI",
+                                      "pct": 102.0, "value": 1000.5, "date": "2026-08-10", "daily": True, "due": None})
+        self.assertEqual(entries[3]["due"], "2028-08-15")
+        self.assertFalse(entries[3]["daily"])
+        self.assertEqual(entries[4], {"kind": "fund", "search": "GLOBAL DINAMICO RF LP", "value": 500.0,
+                                      "date": "2026-09-01"})
+
+    def test_comma_separated_with_dot_decimals(self):
+        entries, skipped = self.parse_csv("tipo,ativo,data,quantidade,preco,valor\nFII,XPML11,01/06/2026,3,105.20,\n")
+        self.assertEqual(skipped, [])
+        self.assertEqual(entries[0]["price"], 105.2)
+
+    def test_invalid_lines_are_reported_not_imported(self):
+        entries, skipped = self.parse_csv(
+            "tipo;ativo;data;quantidade;preco;valor;emissor;indexador;taxa;liquidez_diaria;vencimento\n"
+            "CDB;;10/08/2026;;;1000;Banco X;IPCA;6;nao;10/08/2030\n"
+            "CDB;;10/08/2026;;;1000;Banco X;CDI;100;nao;\n"
+            "ACAO;PETR4;10/08/2026;10;38;;;;;;\n"
+            "FII;XPML11;32/13/2026;1;100;;;;;;\n")
+        self.assertEqual(entries, [])
+        self.assertEqual(len(skipped), 4)
+        for msg, expected in zip(skipped, ["IPCA", "vencimento", "desconhecido", "data invalida"]):
+            self.assertIn(expected, msg)
+
+    def test_xlsx_template(self):
+        rows = [i10.TEMPLATE_COLUMNS, ["FII", "XPML11", "01/06/2026", "3", "105,20", "", "", "", "", "", "", ""]]
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "carteira.xlsx")
+            make_xlsx(p, "Planilha1", rows)
+            entries, skipped = i10.parse_files([p], "2026-10-28")
+        self.assertEqual([e["symbol"] for e in entries], ["XPML11"])
+
+    def test_template_examples_roundtrip(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "modelo.csv")
+            r = subprocess.run([sys.executable, str(ROOT / "i10.py"), "template", "--examples", "-o", p],
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            entries, skipped = i10.parse_files([p], "2026-10-28")
+        self.assertEqual(skipped, [])
+        self.assertEqual(len(entries), len(i10.TEMPLATE_EXAMPLES))
+
+    def test_unknown_file_is_reported(self):
+        entries, skipped = self.parse_csv("foo;bar\n1;2\n")
+        self.assertEqual(entries, [])
+        self.assertIn("formato nao reconhecido", skipped[0])
+
+
 class Snippets(unittest.TestCase):
     def run_cli(self, *args):
         env = dict(os.environ, I10_WALLET="1234567")
