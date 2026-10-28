@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
 """i10 - CLI para automatizar lancamentos na carteira do Investidor10.
 
-A CLI nao faz login nem guarda cookies. Ela gera um snippet JavaScript compacto
-que roda numa aba ja logada do investidor10.com.br (ex.: via claude-in-chrome
-javascript_tool, ou colando no console do DevTools). Assim um lote inteiro de
-lancamentos custa uma unica chamada, em vez de dezenas de cliques/screenshots.
+A CLI nao faz login nem guarda cookies. Ela gera JavaScript que roda numa aba
+ja logada do investidor10.com.br (console do DevTools, ou um agente com
+controle do navegador). A biblioteca `window.i10` e instalada uma vez por aba;
+depois, cada operacao e uma chamada curta.
+
+Fluxo:
+  i10 install                 biblioteca para a aba (uma vez por carregamento)
+  i10 plan lancamentos.json   compara com a carteira: criar / editar / igual (nao grava)
+  i10 apply                   executa o ultimo plano daquela aba
 
 Comandos:
   parse  <arquivos...> [-o lancamentos.json]   extrato B3 / relatorio Itau -> JSON
-  js     <lancamentos.json> [--dry-run]        gera o snippet que grava os lancamentos
-  search <Fund|FixedIncome|...> <termo>        gera snippet de busca de ativo
-  quote  <ticker_type> <id> [data]             gera snippet de cotacao sugerida
-  positions [tipos...]                         gera snippet que lista as posicoes
-  entries [grupos...]                          gera snippet que lista lancamentos com id
+  install                                      biblioteca window.i10
+  plan   <lancamentos.json>                    planeja a sincronizacao (somente leitura)
+  apply                                        grava o ultimo plano
+  search <Fund|Fii|Etf> <termo>                busca ativo
+  quote  <tipo> <id> [data]                    cotacao sugerida
+  positions [tipos...]                         posicoes da carteira
+  entries                                      lancamentos com id, ativo, qtd, preco e data
 
-Um lancamento "ticker" com "id" edita o existente (PUT /entry/update) em vez de criar.
+Todos os comandos que geram JavaScript aceitam -o <arquivo> e --standalone
+(inclui a biblioteca no mesmo script, para colar de uma vez no console).
 
 Formato do JSON de lancamentos:
 {
@@ -29,9 +37,10 @@ Formato do JSON de lancamentos:
      "date": "2026-07-15", "price": null}
   ]
 }
-"type" do ticker: Fii ou Etf (verificados); price null usa a cotacao do site na data.
-"pick" (fundos) pode ser o id do ativo ou um trecho do nome; sem ele o snippet
-so grava se a busca retornar exatamente um resultado, senao devolve os candidatos.
+"type" do ticker: Fii ou Etf (verificados); price null usa a cotacao do site na data;
+"side": "SELL" para venda; "id" forca a edicao daquele lancamento.
+"pick" (fundos) pode ser o id do ativo ou um trecho do nome; sem ele o plano
+so aceita a busca se ela retornar exatamente um resultado.
 """
 import argparse
 import json
@@ -41,10 +50,10 @@ import sys
 import unicodedata
 import zipfile
 import xml.etree.ElementTree as ET
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 API = "/wallet/api/proxy/wallet-app"
 
@@ -102,13 +111,12 @@ def _norm(s):
     return s.upper().strip()
 
 
-def parse_itau_produtos(path, on_date):
-    """Relatorio 'meus produtos' do Itau -> lancamentos de renda fixa e fundos.
+def parse_itau_produtos(rows, on_date):
+    """Aba 'produtos-contratados' do relatorio Itau -> renda fixa e fundos pelo saldo.
 
-    Acoes, ETFs e FIIs ficam de fora: a Integracao B3 do site importa esses
+    Acoes, ETFs e FIIs ficam de fora: o extrato de movimentacao da B3 traz esses
     com data e preco reais.
     """
-    rows = read_xlsx(path).get("produtos-contratados", [])
     entries, skipped = [], []
     for r in rows[1:]:
         name, cat, value = r[0], _norm(r[1]), float(r[-1] or 0)
@@ -121,27 +129,44 @@ def parse_itau_produtos(path, on_date):
             entries.append({"kind": "fixed", "emitter": emitter, "title": "CDB", "indexer": "CDI",
                             "pct": 100, "value": value, "date": on_date, "daily": True, "due": None})
         else:
-            skipped.append(f"{name} ({r[1]}) -> use a Integracao B3")
+            skipped.append(f"{name} ({r[1]}) -> use o extrato de movimentacao da B3")
     return entries, skipped
 
 
-# Feriados sem pregao na B3: datas fixas + moveis de 2026/2027 (Carnaval, Sexta Santa, Corpus Christi)
+def easter(year):
+    """Domingo de Pascoa (algoritmo de Meeus/Jones/Butcher, calendario gregoriano)."""
+    a, b, c = year % 19, year // 100, year % 100
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month, day = divmod(h + l - 7 * m + 114, 31)
+    return date(year, month, day + 1)
+
+
+# Sem pregao na B3. Feriados municipais de SP (25/01, 09/07) deixaram de fechar a bolsa em 2022.
 _B3_FIXED = {"01-01", "04-21", "05-01", "09-07", "10-12", "11-02", "11-15", "11-20", "12-24", "12-25", "12-31"}
-_B3_MOVING = {"2026-02-16", "2026-02-17", "2026-04-03", "2026-06-04",
-              "2027-02-08", "2027-02-09", "2027-03-26", "2027-05-27"}
 
 
-def _is_b3_day(d):
-    s = d.isoformat()
-    return d.weekday() < 5 and s[5:] not in _B3_FIXED and s not in _B3_MOVING
+def b3_holidays(year):
+    p = easter(year)
+    moving = {p - timedelta(days=48), p - timedelta(days=47), p - timedelta(days=2), p + timedelta(days=60)}
+    fixed = {date(year, int(md[:2]), int(md[3:])) for md in _B3_FIXED}
+    return fixed | moving
 
 
-def _minus_business_days(d, n):
-    """Data do pregao a partir da liquidacao (D+2), pulando fins de semana e feriados B3."""
-    from datetime import timedelta
+def is_b3_day(d):
+    return d.weekday() < 5 and d not in b3_holidays(d.year)
+
+
+def minus_business_days(d, n):
+    """Data do pregao a partir da liquidacao (D+n), pulando fins de semana e feriados B3."""
     while n:
         d -= timedelta(days=1)
-        if _is_b3_day(d):
+        if is_b3_day(d):
             n -= 1
     return d
 
@@ -174,7 +199,7 @@ def parse_b3_movimentacao(rows):
             skipped.append(f"{symbol}: tipo de ativo nao mapeado (acao/BDR?)")
             continue
         dd, mm, yy = r[col["DATA"]].split("/")
-        trade = _minus_business_days(date(int(yy), int(mm), int(dd)), 2)
+        trade = minus_business_days(date(int(yy), int(mm), int(dd)), 2)
         e = {"kind": "ticker", "type": kind, "symbol": symbol, "qty": float(r[col["QUANTIDADE"]]),
              "date": trade.isoformat(), "price": float(r[col["PRECO UNITARIO"]])}
         if _norm(r[col["ENTRADA/SAIDA"]]).startswith("DEBITO"):
@@ -184,21 +209,24 @@ def parse_b3_movimentacao(rows):
     return entries, skipped
 
 
-def cmd_parse(a):
+def parse_files(paths, on_date):
     entries, skipped = [], []
-    for p in a.files:
-        sheets = read_xlsx(p) if p.lower().endswith(".xlsx") else {}
+    for p in paths:
+        sheets = read_xlsx(p) if str(p).lower().endswith(".xlsx") else {}
         first = next(iter(sheets.values()), [[]])
         if "produtos-contratados" in sheets:
-            e, s = parse_itau_produtos(p, a.date)
-            entries += e
-            skipped += s
+            e, s = parse_itau_produtos(sheets["produtos-contratados"], on_date)
         elif first and "MOVIMENTACAO" in [_norm(h) for h in first[0]]:
             e, s = parse_b3_movimentacao(first)
-            entries += e
-            skipped += s
         else:
-            skipped.append(f"{Path(p).name}: formato nao suportado pelo parse (ignorado)")
+            e, s = [], [f"{Path(p).name}: formato nao suportado (ignorado)"]
+        entries += e
+        skipped += s
+    return entries, skipped
+
+
+def cmd_parse(a):
+    entries, skipped = parse_files(a.files, a.date)
     out = {"wallet": a.wallet, "entries": entries}
     Path(a.out).write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"{len(entries)} lancamentos -> {a.out}")
@@ -206,98 +234,274 @@ def cmd_parse(a):
         print("  ignorado:", s, file=sys.stderr)
 
 
-# --------------------------------------------------------------------------- js
+# --------------------------------------------------------------------------- biblioteca da aba
 
-_RUNNER = r"""
-const W=__WALLET__,E=__ENTRIES__,DRY=__DRY__,A='__API__';
-const br=d=>d.split('-').reverse().join('/');
-const j=async(u,o)=>{const r=await fetch(A+u,o);const t=await r.text();try{return [r.status,JSON.parse(t)]}catch(e){return [r.status,t]}};
-const base={user_wallet_id:W,source:'MANUAL',custom_bonus_price:0,cost:0,type:'BUY',auto_conversion:1,currency:'BRL',use_custom_bonus_price:false,use_custom_bonus_qty:false};
-const out=[];
-for(const e of E){
- let body,tag;
- if(e.kind==='fixed'){
-  tag=`${e.emitter} ${e.title} ${e.pct}% ${e.indexer} R$${e.value}`;
-  body={...base,emitter:e.emitter,investment_type:e.title,rate_type:'POST',indexer:e.indexer,due_date:e.due?br(e.due):null,percentage_cdi:e.pct,ticker_type:'FixedIncome',date:br(e.date),price:e.value,dailyLiquidity:!!e.daily};
- }else if(e.kind==='fund'){
-  let [,res]=await j('/search-ticker/Fund?'+new URLSearchParams({term:e.search,_type:'query',q:e.search}));
-  res=Array.isArray(res)?res:(res.data||[]);
-  let hit=res;
-  if(e.pick!=null)hit=res.filter(x=>x.id==e.pick||x.name.toUpperCase().includes(String(e.pick).toUpperCase()));
-  if(hit.length!==1){out.push({e:e.search,erro:'ambiguo/nao achado',candidatos:hit.slice(0,8).map(x=>x.id+' '+x.name)});continue}
-  const t=hit[0];tag=`${t.name} R$${e.value}`;
-  const [,q]=await j('/quotation?'+new URLSearchParams({ticker_type:'Fund',ticker:t.id,date:e.date,type:'BUY',currency:'BRL',ticker_name:'',api_version:'v2'}));
-  const price=+q;if(!(price>0)){out.push({e:tag,erro:'sem cotacao',q});continue}
-  body={...base,applied:Math.round(e.value*100),ticker:t.id,ticker_type:'Fund',date:br(e.date),price,qty:+(e.value/price).toFixed(8)};
- }else if(e.kind==='ticker'){
-  let [,res]=await j(`/search-ticker/${e.type}?`+new URLSearchParams({term:e.symbol,_type:'query',q:e.symbol}));
-  res=Array.isArray(res)?res:(res.data||[]);
-  const hit=res.filter(x=>x.name.toUpperCase().startsWith(e.symbol.toUpperCase()+' '));
-  if(hit.length!==1){out.push({e:e.symbol,erro:'ambiguo/nao achado',candidatos:res.slice(0,8).map(x=>x.id+' '+x.name)});continue}
-  const t=hit[0];let price=e.price;
-  if(price==null){const [,q]=await j('/quotation?'+new URLSearchParams({ticker_type:e.type,ticker:t.id,date:e.date,type:'BUY',currency:'BRL',ticker_name:'',api_version:'v2'}));price=+q}
-  if(!(price>0)){out.push({e:e.symbol,erro:'sem cotacao'});continue}
-  tag=`${e.symbol} ${e.qty}x${price} ${e.date}`;
-  body={...base,qty:e.qty,cost:e.cost||0,ticker:t.id,ticker_type:e.type,date:br(e.date),price,type:e.side||'BUY'};
- }else{out.push({e,erro:'kind desconhecido'});continue}
- if(e.id)body.id=e.id;
- if(DRY){out.push({ok:'dry',tag,body});continue}
- const [s,r]=await j(e.id?'/entry/update':'/entry/store',{method:e.id?'PUT':'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify(body)});
- out.push(s===200&&r&&r.response?{ok:tag}:{erro:tag,s,r:String(JSON.stringify(r)).slice(0,200)});
-}
-JSON.stringify(out);
+RUNNER = r"""
+window.i10 = (() => {
+  const VERSION = '__VERSION__';
+  const A = '__API__';
+  const br = (d) => d.split('-').reverse().join('/');
+  const iso = (s) => String(s || '').slice(0, 10);
+  const list = (r) => Array.isArray(r) ? r : ((r && r.data) || []);
+  const j = async (u, o) => {
+    const r = await fetch(A + u, o);
+    const t = await r.text();
+    let b = t;
+    try { b = JSON.parse(t); } catch (e) {}
+    return [r.status, b];
+  };
+  const send = (method, path, body) => j(path, {
+    method, headers: {'Content-Type': 'application/json', Accept: 'application/json'}, body: JSON.stringify(body)
+  });
+  const base = (W) => ({
+    user_wallet_id: W, source: 'MANUAL', custom_bonus_price: 0, cost: 0, type: 'BUY', auto_conversion: 1,
+    currency: 'BRL', use_custom_bonus_price: false, use_custom_bonus_qty: false
+  });
+  const search = async (type, term) =>
+    list((await j('/search-ticker/' + type + '?' + new URLSearchParams({term, _type: 'query', q: term})))[1]);
+  const quote = async (type, id, date) => +(await j('/quotation?' + new URLSearchParams({
+    ticker_type: type, ticker: id, date, type: 'BUY', currency: 'BRL', ticker_name: '', api_version: 'v2'
+  })))[1];
+
+  async function resolve(W, e) {
+    if (e.kind === 'fixed') {
+      return {tag: `${e.emitter} ${e.title} ${e.pct}% ${e.indexer} R$${e.value} ${e.date}`, body: {
+        ...base(W), emitter: e.emitter, investment_type: e.title, rate_type: 'POST', indexer: e.indexer,
+        due_date: e.due ? br(e.due) : null, percentage_cdi: e.pct, ticker_type: 'FixedIncome',
+        date: br(e.date), price: e.value, dailyLiquidity: !!e.daily
+      }};
+    }
+    if (e.kind === 'fund') {
+      const res = await search('Fund', e.search);
+      const hit = e.pick == null ? res : res.filter((x) =>
+        x.id == e.pick || x.name.toUpperCase().includes(String(e.pick).toUpperCase()));
+      if (hit.length !== 1) {
+        return {erro: 'fundo ambiguo/nao achado: ' + e.search, candidatos: hit.slice(0, 8).map((x) => x.id + ' ' + x.name)};
+      }
+      const t = hit[0];
+      const price = await quote('Fund', t.id, e.date);
+      if (!(price > 0)) return {erro: 'sem cotacao: ' + t.name + ' ' + e.date};
+      return {tag: `${t.name} R$${e.value} ${e.date}`, body: {
+        ...base(W), applied: Math.round(e.value * 100), ticker: t.id, ticker_type: 'Fund',
+        date: br(e.date), price, qty: +(e.value / price).toFixed(8)
+      }};
+    }
+    if (e.kind === 'ticker') {
+      const res = await search(e.type, e.symbol);
+      const hit = res.filter((x) => x.name.toUpperCase().startsWith(e.symbol.toUpperCase() + ' '));
+      if (hit.length !== 1) {
+        return {erro: 'ativo ambiguo/nao achado: ' + e.type + ' ' + e.symbol, candidatos: res.slice(0, 8).map((x) => x.id + ' ' + x.name)};
+      }
+      const t = hit[0];
+      let price = e.price;
+      if (price == null) price = await quote(e.type, t.id, e.date);
+      if (!(price > 0)) return {erro: 'sem cotacao: ' + e.symbol + ' ' + e.date};
+      const side = e.side || 'BUY';
+      return {tag: `${side} ${e.symbol} ${e.qty}x${price} ${e.date}`, body: {
+        ...base(W), qty: e.qty, cost: e.cost || 0, ticker: t.id, ticker_type: e.type,
+        date: br(e.date), price, type: side
+      }};
+    }
+    return {erro: 'kind desconhecido: ' + e.kind};
+  }
+
+  const fromBr = (d) => String(d || '').split('/').reverse().join('-');
+  const FIXED_GROUP = 3;
+
+  async function existing(W) {
+    const rows = [];
+    for (const g of [1, 2, 3, 4, 5, 6]) {
+      const [s, r] = await j(`/entries/${W}/${g}?length=1000&start=0&raw=1`);
+      if (s === 200) for (const x of list(r)) rows.push({g, x});
+    }
+    const out = [];
+    for (let i = 0; i < rows.length; i += 8) {
+      const part = await Promise.all(rows.slice(i, i + 8).map(({g, x: row}) =>
+        j(`/entries/${W}/0/${row.id}`).then(([s, x]) => {
+          if (s === 200 && x && x.id) {
+            return {id: x.id, name: x.name, ticker: x.ticker, ticker_type: x.ticker_type, qty: +x.qty, price: +x.price,
+              applied: +x.applied, cost: +x.cost || 0, date: iso(x.date), side: x.type || 'BUY'};
+          }
+          if (g === FIXED_GROUP) {
+            return {id: row.id, name: String(row.ticker || ''), ticker_type: 'FixedIncome', qty: +row.qty,
+              price: +row.price_raw, applied: +row.total_raw, cost: 0, date: fromBr(row.date),
+              side: row.type === 'Venda' ? 'SELL' : 'BUY'};
+          }
+          return {id: row.id, semDetalhe: true};
+        })));
+      out.push(...part);
+    }
+    return out;
+  }
+
+  const close = (a, b, tol) => Math.abs(a - b) <= tol;
+  const dayDiff = (a, b) => Math.abs(new Date(a) - new Date(b)) / 864e5;
+
+  function match(b, e, pool) {
+    const date = e.date;
+    if (b.ticker_type === 'FixedIncome') {
+      const label = `${b.investment_type} - ${b.emitter} - `.toUpperCase();
+      const m = pool.find((x) => x.date === date && x.name.toUpperCase().startsWith(label) &&
+        (close(x.price, b.price, 0.01) || close(x.applied, b.price, 0.01)));
+      return m ? ['same', m] : ['create', null];
+    }
+    const same = pool.filter((x) => x.ticker == b.ticker && x.side === b.type);
+    if (b.ticker_type === 'Fund') {
+      const m = same.find((x) => x.date === date && close(x.qty, b.qty, 1e-4));
+      return m ? ['same', m] : ['create', null];
+    }
+    const exact = same.find((x) => x.date === date && close(x.qty, b.qty, 1e-8) && close(x.price, b.price, 0.005));
+    if (exact) return ['same', exact];
+    const cand = same.filter((x) => close(x.qty, b.qty, 1e-8)).sort((p, q) => dayDiff(p.date, date) - dayDiff(q.date, date))[0];
+    return cand ? ['update', cand] : ['create', null];
+  }
+
+  let lastPlan = null;
+
+  async function plan(W, E) {
+    const have = await existing(W);
+    const used = new Set();
+    const ops = [];
+    const res = {criar: [], editar: [], iguais: 0, extras: [], erros: [], semDetalhe: 0};
+    for (const e of E) {
+      const r = await resolve(W, e);
+      if (r.erro) { res.erros.push(r); continue; }
+      const b = r.body;
+      if (e.id) {
+        const x = have.find((h) => h.id == e.id);
+        if (!x) { res.erros.push({erro: 'id nao encontrado na carteira: ' + e.id}); continue; }
+        used.add(x.id);
+        b.id = x.id;
+        ops.push({op: 'update', tag: r.tag, body: b});
+        res.editar.push(r.tag + ` (era ${x.qty}x${x.price} ${x.date})`);
+        continue;
+      }
+      const pool = have.filter((x) => !x.semDetalhe && !used.has(x.id) && x.ticker_type === b.ticker_type);
+      const [kind, m] = match(b, e, pool);
+      if (m) used.add(m.id);
+      if (kind === 'same') { res.iguais++; continue; }
+      if (kind === 'update') {
+        b.id = m.id;
+        if (e.cost == null) b.cost = m.cost;
+        ops.push({op: 'update', tag: r.tag, body: b});
+        res.editar.push(r.tag + ` (era ${m.qty}x${m.price} ${m.date})`);
+      } else {
+        ops.push({op: 'create', tag: r.tag, body: b});
+        res.criar.push(r.tag);
+      }
+    }
+    const types = new Set(ops.map((o) => o.body.ticker_type).concat(E.map((e) => e.type || (e.kind === 'fund' ? 'Fund' : 'FixedIncome'))));
+    for (const x of have) {
+      if (x.semDetalhe) res.semDetalhe++;
+      else if (!used.has(x.id) && types.has(x.ticker_type)) res.extras.push(`${x.id} ${x.side} ${x.name} ${x.qty}x${x.price} ${x.date}`);
+    }
+    lastPlan = {W, ops, at: Date.now()};
+    if (res.semDetalhe && res.criar.length) {
+      res.aviso = `${res.semDetalhe} lancamento(s) da carteira sem detalhe nao entraram na comparacao: ` +
+        'confira com i10 entries se algum "criar" ja existe antes do apply';
+    }
+    res.resumo = `${res.criar.length} criar, ${res.editar.length} editar, ${res.iguais} iguais, ` +
+      `${res.extras.length} so na carteira, ${res.erros.length} erros` + (ops.length ? ' -> rode i10 apply' : '');
+    return JSON.stringify(res);
+  }
+
+  async function apply() {
+    if (!lastPlan) return 'nenhum plano nesta aba: rode i10 plan primeiro';
+    if (Date.now() - lastPlan.at > 30 * 60 * 1000) { lastPlan = null; return 'plano expirou (30 min): rode i10 plan de novo'; }
+    const out = [];
+    for (const o of lastPlan.ops) {
+      const [s, r] = o.op === 'update' ? await send('PUT', '/entry/update', o.body) : await send('POST', '/entry/store', o.body);
+      out.push(s === 200 && r && r.response ? {ok: o.op + ' ' + o.tag} : {erro: o.op + ' ' + o.tag, s, r: String(JSON.stringify(r)).slice(0, 200)});
+    }
+    lastPlan = null;
+    return JSON.stringify(out);
+  }
+
+  async function positions(W, types) {
+    const o = [];
+    for (const t of types) {
+      const [, r] = await j(`/summary/actives/${W}/${t}`);
+      for (const x of list(r)) o.push([t, x.ticker_name || x.name, +x.quantity, +(+x.avg_price).toFixed(4), x.equity_total].join(' '));
+    }
+    return o.join('\n');
+  }
+
+  async function entries(W) {
+    return (await existing(W)).map((x) => x.semDetalhe ? `${x.id} (sem detalhe)` :
+      `${x.id} ${x.ticker_type} ${x.side} ${x.name} ${x.qty}x${x.price} ${x.date}`).join('\n');
+  }
+
+  const searchText = async (type, term) => (await search(type, term)).map((x) => x.id + ' ' + x.name).join('\n');
+
+  return {version: VERSION, plan, apply, positions, entries, search: searchText, quote};
+})();
+'i10 ' + i10.version + ' instalado';
 """
 
 
-def _snippet(template, **kw):
-    s = template
-    for k, v in kw.items():
-        s = s.replace(f"__{k}__", v)
-    # compacta: remove quebras de linha e indentacao
-    return "".join(line.strip() for line in s.strip().splitlines())
+def runner():
+    return RUNNER.replace("__VERSION__", __version__).replace("__API__", API).strip()
 
 
-def cmd_js(a):
-    data = json.loads(Path(a.file).read_text(encoding="utf-8-sig"))
-    js = _snippet(_RUNNER, WALLET=str(int(data["wallet"])), ENTRIES=json.dumps(data["entries"], ensure_ascii=False),
-                  DRY="true" if a.dry_run else "false", API=API)
+def _call(expr):
+    """Chamada curta para a biblioteca, com aviso se ela nao estiver na aba (ou for de outra versao)."""
+    v = __version__
+    return (f"(window.i10 && i10.version === '{v}') ? {expr} : "
+            f"'i10 {v} nao esta instalado nesta aba: rode o snippet de \"i10 install\" (a aba recarregou?)'")
+
+
+def _emit(a, js):
+    if getattr(a, "standalone", False):
+        js = runner() + "\n" + js
     if a.out:
         Path(a.out).write_text(js, encoding="utf-8")
-        print(f"{len(data['entries'])} lancamentos -> {a.out} ({len(js)} chars)")
+        print(f"-> {a.out} ({len(js)} chars)")
     else:
         print(js)
 
 
+def _load(path):
+    return json.loads(Path(path).read_text(encoding="utf-8-sig"))
+
+
+def cmd_install(a):
+    _emit(a, runner())
+
+
+def cmd_plan(a):
+    data = _load(a.file)
+    _emit(a, _call(f"await i10.plan({int(data['wallet'])}, {json.dumps(data['entries'], ensure_ascii=False)})"))
+
+
+def cmd_apply(a):
+    _emit(a, _call("await i10.apply()"))
+
+
 def cmd_search(a):
-    q = json.dumps(a.term)
-    print(f"(await fetch('{API}/search-ticker/{a.type}?'+new URLSearchParams({{term:{q},_type:'query',q:{q}}}))"
-          ".then(r=>r.json())).map?.(x=>x.id+' '+x.name).join('\\n')")
+    _emit(a, _call(f"await i10.search({json.dumps(a.type)}, {json.dumps(a.term, ensure_ascii=False)})"))
 
 
 def cmd_quote(a):
-    print(f"await fetch('{API}/quotation?'+new URLSearchParams({{ticker_type:'{a.type}',ticker:'{a.id}',"
-          f"date:'{a.date}',type:'BUY',currency:'BRL',ticker_name:'',api_version:'v2'}})).then(r=>r.text())")
+    _emit(a, _call(f"await i10.quote({json.dumps(a.type)}, {json.dumps(a.id)}, {json.dumps(a.date)})"))
 
 
 def cmd_positions(a):
-    types = json.dumps(a.types)
-    print(f"const o=[];for(const t of {types}){{const r=await fetch('{API}/summary/actives/{a.wallet}/'+t)"
-          ".then(r=>r.json());for(const x of (r.data||[]))o.push([t,x.ticker_name||x.name,x.quantity,x.avg_price,"
-          "x.equity_total].join(' '))};o.join('\\n')")
+    _emit(a, _call(f"await i10.positions({a.wallet}, {json.dumps(a.types)})"))
 
 
 def cmd_entries(a):
-    # grupos da tela de Lancamentos: 1 renda variavel, 3 renda fixa, 6 fundos
-    groups = json.dumps(a.groups)
-    print(f"const o=[];for(const g of {groups}){{const r=await fetch(`{API}/entries/{a.wallet}/${{g}}?length=500&start=0&raw=1`)"
-          ".then(r=>r.json());for(const x of (r.data||[]))o.push([g,x.id,+x.qty,x.price,(x.date||'').slice(0,10)].join(' '))};"
-          "o.join('\\n')")
+    _emit(a, _call(f"await i10.entries({a.wallet})"))
 
 
 def _wallet_arg(s):
     env = os.environ.get("I10_WALLET")
     s.add_argument("--wallet", type=int, default=int(env) if env else None,
                    help="id da carteira (padrao: $I10_WALLET)")
+
+
+def _js_args(s):
+    s.add_argument("-o", "--out", help="grava o snippet em arquivo (UTF-8) em vez de imprimir")
+    s.add_argument("--standalone", action="store_true", help="inclui a biblioteca no mesmo script")
 
 
 def main(argv=None):
@@ -309,34 +513,44 @@ def main(argv=None):
     s.add_argument("files", nargs="+")
     s.add_argument("-o", "--out", default="lancamentos.json")
     _wallet_arg(s)
-    s.add_argument("--date", default=date.today().isoformat(), help="data dos lancamentos (AAAA-MM-DD)")
+    s.add_argument("--date", default=date.today().isoformat(), help="data dos lancamentos pelo saldo (AAAA-MM-DD)")
     s.set_defaults(fn=cmd_parse)
 
-    s = sub.add_parser("js", help="gera snippet que grava os lancamentos")
-    s.add_argument("file")
-    s.add_argument("--dry-run", action="store_true", help="resolve ativos e cotacoes sem gravar")
-    s.add_argument("-o", "--out", help="grava o snippet em arquivo (UTF-8) em vez de imprimir")
-    s.set_defaults(fn=cmd_js)
+    s = sub.add_parser("install", help="biblioteca window.i10 para a aba (uma vez por carregamento)")
+    s.add_argument("-o", "--out", help="grava em arquivo (UTF-8) em vez de imprimir")
+    s.set_defaults(fn=cmd_install)
 
-    s = sub.add_parser("search", help="gera snippet de busca de ativo")
-    s.add_argument("type", help="Fund, FixedIncome, ...")
+    s = sub.add_parser("plan", help="compara o JSON com a carteira: criar/editar/igual (nao grava)")
+    s.add_argument("file")
+    _js_args(s)
+    s.set_defaults(fn=cmd_plan)
+
+    s = sub.add_parser("apply", help="grava o ultimo plano feito nesta aba")
+    _js_args(s)
+    s.set_defaults(fn=cmd_apply)
+
+    s = sub.add_parser("search", help="busca ativo")
+    s.add_argument("type", help="Fund, Fii, Etf")
     s.add_argument("term")
+    _js_args(s)
     s.set_defaults(fn=cmd_search)
 
-    s = sub.add_parser("quote", help="gera snippet de cotacao sugerida")
+    s = sub.add_parser("quote", help="cotacao sugerida pelo site numa data")
     s.add_argument("type")
     s.add_argument("id")
     s.add_argument("date", nargs="?", default=date.today().isoformat())
+    _js_args(s)
     s.set_defaults(fn=cmd_quote)
 
-    s = sub.add_parser("positions", help="gera snippet que lista posicoes (tipo nome qtd preco_medio total)")
+    s = sub.add_parser("positions", help="posicoes (tipo ativo qtd preco_medio total)")
     s.add_argument("types", nargs="*", default=["Fii", "Etf", "Fund", "FixedIncome"])
     _wallet_arg(s)
+    _js_args(s)
     s.set_defaults(fn=cmd_positions)
 
-    s = sub.add_parser("entries", help="gera snippet que lista lancamentos com id (grupo id qtd preco data)")
-    s.add_argument("groups", nargs="*", type=int, default=[1, 3, 6])
+    s = sub.add_parser("entries", help="lancamentos com id (id tipo lado ativo qtd x preco data)")
     _wallet_arg(s)
+    _js_args(s)
     s.set_defaults(fn=cmd_entries)
 
     sys.stdout.reconfigure(encoding="utf-8")
