@@ -115,7 +115,7 @@ preço médio, total).
 |---|---|---|
 | `ticker` | `type` (`Fii`, `Etf`), `symbol`, `qty`, `date`, `price` | `price: null` usa a cotação do site. `"side": "SELL"` lança venda. `"id"` força a edição daquele lançamento. |
 | `fixed` | `emitter`, `title` (`CDB`, `LCI`…), `indexer`, `pct`, `value`, `date`, `daily`, `due` | Pós-fixado. `due: null` com `daily: true` = sem vencimento. |
-| `fund` | `search`, `value`, `date`, `pick` (opcional) | `pick` é o id ou um trecho do nome do fundo, para resolver ambiguidades. |
+| `fund` | `search`, `value`, `date`, `pick` (opcional) | `pick` é o id ou um trecho do nome do fundo, para resolver ambiguidades. Resgate: `"side": "SELL"`, e `"qty": "all"` para zerar a posição. |
 
 Há um exemplo completo em [`examples/lancamentos.exemplo.json`](examples/lancamentos.exemplo.json).
 

@@ -56,7 +56,13 @@ por carregamento da aba, e cada operação depois disso custa uma única chamada
 - **Editar, nunca apagar.** A CLI não tem exclusão. Se o usuário quiser excluir, ele faz pelo site.
 - **Não confie no preço sugerido pelo formulário do site.** Ele já ficou com a cotação do dia em vez da
   data escolhida. Use o `price` do extrato. `price: null` consulta a cotação da data pela API.
-- **Tipos testados no site:** `Fii`, `Etf`, CDB pós-fixado em % do CDI e fundos. Antes de lançar algo
+- **Tipos testados no site:** `Fii`, `Etf`, CDB pós-fixado em % do CDI (criar e editar) e fundos
+  (aplicar e resgatar). Para resgate total de fundo, use `"side": "SELL", "qty": "all"`, com `"value"`
+  igual ao valor resgatado.
+- **Relatórios mensais de banco em PDF** (por exemplo, o "Relatório de Investimentos" do Itaú): leia o
+  extrato de cada mês. Um mês faltante pode ser reconstruído pela diferença de saldos: o saldo do mês
+  seguinte, menos o rendimento informado, menos o saldo do mês anterior. Diga ao usuário o que foi
+  estimado. Antes de lançar algo
   não validado, avise e confira o resultado com `entries`. Isso vale para:
   - LCI, LCA, LC, LF, RDB, debênture, CRI e CRA;
   - vendas;

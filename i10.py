@@ -40,7 +40,9 @@ Formato do JSON de lancamentos:
   ]
 }
 "type" do ticker: Fii ou Etf (verificados); price null usa a cotacao do site na data;
-"side": "SELL" para venda; "id" forca a edicao daquele lancamento.
+"side": "SELL" para venda (ticker e fundo); "id" forca a edicao daquele lancamento.
+Fundo com "side": "SELL" e "qty": "all" vende todas as cotas da carteira; com "value",
+o preco da cota passa a ser value/qty (o valor efetivamente resgatado).
 "pick" (fundos) pode ser o id do ativo ou um trecho do nome; sem ele o plano
 so aceita a busca se ela retornar exatamente um resultado.
 """
@@ -400,7 +402,10 @@ window.i10 = (() => {
     ticker_type: type, ticker: id, date, type: 'BUY', currency: 'BRL', ticker_name: '', api_version: 'v2'
   })))[1];
 
-  async function resolve(W, e) {
+  const held = (have, ticker, skipId) => have.filter((x) => !x.semDetalhe && x.ticker == ticker && x.id != skipId)
+    .reduce((s, x) => s + (x.side === 'SELL' ? -x.qty : x.qty), 0);
+
+  async function resolve(W, e, have) {
     if (e.kind === 'fixed') {
       return {tag: `${e.emitter} ${e.title} ${e.pct}% ${e.indexer} R$${e.value} ${e.date}`, body: {
         ...base(W), emitter: e.emitter, investment_type: e.title, rate_type: 'POST', indexer: e.indexer,
@@ -416,11 +421,21 @@ window.i10 = (() => {
         return {erro: 'fundo ambiguo/nao achado: ' + e.search, candidatos: hit.slice(0, 8).map((x) => x.id + ' ' + x.name)};
       }
       const t = hit[0];
-      const price = await quote('Fund', t.id, e.date);
+      const side = e.side || 'BUY';
+      let price = await quote('Fund', t.id, e.date);
+      let qty;
+      if (e.qty === 'all') {
+        if (side !== 'SELL') return {erro: 'qty "all" so vale para venda: ' + t.name};
+        qty = +held(have, t.id, e.id).toFixed(8);
+        if (!(qty > 0)) return {erro: 'sem cotas para vender: ' + t.name};
+        if (e.value != null) price = +(e.value / qty).toFixed(8);
+      }
       if (!(price > 0)) return {erro: 'sem cotacao: ' + t.name + ' ' + e.date};
-      return {tag: `${t.name} R$${e.value} ${e.date}`, body: {
-        ...base(W), applied: Math.round(e.value * 100), ticker: t.id, ticker_type: 'Fund',
-        date: br(e.date), price, qty: +(e.value / price).toFixed(8)
+      if (qty == null) qty = +(e.value / price).toFixed(8);
+      const value = e.value != null ? e.value : +(qty * price).toFixed(2);
+      return {tag: `${side} ${t.name} R$${value} ${e.date}`, body: {
+        ...base(W), applied: Math.round(value * 100), ticker: t.id, ticker_type: 'Fund',
+        date: br(e.date), price, qty, type: side
       }};
     }
     if (e.kind === 'ticker') {
@@ -501,7 +516,7 @@ window.i10 = (() => {
     const ops = [];
     const res = {criar: [], editar: [], iguais: 0, extras: [], erros: [], semDetalhe: 0};
     for (const e of E) {
-      const r = await resolve(W, e);
+      const r = await resolve(W, e, have);
       if (r.erro) { res.erros.push(r); continue; }
       const b = r.body;
       if (e.id) {
