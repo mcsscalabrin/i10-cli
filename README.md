@@ -42,7 +42,7 @@ Ele nunca pede sua senha nem guarda cookies: quem autentica é a sessão do seu 
 - **Importadores por formato**: o arquivo é reconhecido pelo cabeçalho (`i10 formats` lista os
   suportados). Relatórios específicos de bancos, hoje só o "meus produtos" do Itaú, entram como
   importadores opcionais, e adicionar outro banco é uma função.
-- **Tipos suportados**: FIIs, ETFs, renda fixa pós-fixada (% do CDI) e fundos de investimento.
+- **Tipos suportados**: ações, BDRs, FIIs, ETFs, renda fixa pós-fixada (% do CDI) e fundos de investimento.
 - **Sincronização sem duplicar**: o `plan` reconhece o que já foi lançado. Rodar o mesmo extrato duas vezes
   não cria nada novo, e uma compra lançada com data ou preço estimados vira uma *edição*.
 - **Nada é gravado sem plano**: `plan` só lê. `apply` grava exatamente o último plano mostrado.
@@ -123,8 +123,8 @@ Há um exemplo completo em [`examples/lancamentos.exemplo.json`](examples/lancam
 
 | Formato (`i10 formats`) | De onde vem | O que traz |
 |---|---|---|
-| `b3-movimentacao` | Área do Investidor B3 → Extratos → Movimentação (.xlsx) | FIIs e ETFs de **qualquer banco ou corretora**, com data do pregão e preço reais |
-| `modelo` | Planilha modelo do i10, preenchida por você (.csv ou .xlsx) | FIIs, ETFs, renda fixa pós-fixada (% do CDI) e fundos de **qualquer banco** |
+| `b3-movimentacao` | Área do Investidor B3 → Extratos → Movimentação (.xlsx) | Ações, BDRs, FIIs e ETFs de **qualquer banco ou corretora**, com data do pregão e preço reais |
+| `modelo` | Planilha modelo do i10, preenchida por você (.csv ou .xlsx) | Ações, BDRs, FIIs, ETFs, renda fixa pós-fixada (% do CDI) e fundos de **qualquer banco** |
 | `itau-produtos` | Itaú → relatório "meus produtos" (.xlsx) | Renda fixa e fundos do Itaú, pelo saldo na data de `--date` |
 
 Você pode passar vários arquivos de uma vez: `i10 parse movimentacao.xlsx minha-renda-fixa.csv`.
@@ -141,13 +141,15 @@ datas como `DD/MM/AAAA` ou `AAAA-MM-DD`:
 
 | tipo | ativo | data | quantidade | preco | valor | emissor | indexador | taxa | liquidez_diaria | vencimento | lado |
 |---|---|---|---|---|---|---|---|---|---|---|---|
+| ACAO | PETR4 | 27/07/2026 | 2 | *(vazio = cotação do dia)* | | | | | | | compra |
+| BDR | AAPL34 | 27/07/2026 | 2 | *(vazio = cotação do dia)* | | | | | | | compra |
 | FII | XPML11 | 01/06/2026 | 3 | 105,20 | | | | | | | compra |
 | ETF | BOVA11 | 27/07/2026 | 2 | *(vazio = cotação do dia)* | | | | | | | compra |
 | CDB | | 10/08/2026 | | | 1.000,00 | Banco X | CDI | 102 | sim | | |
 | LCI | | 15/08/2026 | | | 5.000,00 | Banco Y | CDI | 95 | nao | 15/08/2028 | |
 | FUNDO | GLOBAL DINAMICO RF LP | 01/09/2026 | | | 500,00 | | | | | | |
 
-- `tipo`: `FII`, `ETF`, `FUNDO` ou um título de renda fixa (`CDB`, `LCI`, `LCA`, `LC`, `LF`, `RDB`,
+- `tipo`: `ACAO`, `BDR`, `FII`, `ETF`, `FUNDO` ou um título de renda fixa (`CDB`, `LCI`, `LCA`, `LC`, `LF`, `RDB`,
   `DEBENTURE`, `CRI`, `CRA`).
 - **Renda fixa:** `emissor`, `valor` e `taxa` (% do CDI) são obrigatórios. Sem liquidez diária, informe
   também o `vencimento`.
@@ -215,8 +217,8 @@ própria sessão. Nenhum dado sai do seu computador para terceiros.
 ## Limitações
 
 - **API não documentada.** Os endpoints foram observados no próprio site e podem mudar sem aviso.
-- **Testado com** FIIs, ETFs, CDB pós-fixado e fundos de investimento. Ações, BDRs, vendas, renda fixa
-  prefixada e Tesouro Direto ainda não foram validados. Pull requests são bem-vindos.
+- **Testado com** ações, BDRs, FIIs, ETFs, CDB pós-fixado e fundos de investimento. Renda fixa
+  prefixada e Tesouro Direto ainda não são suportados. Pull requests são bem-vindos.
 - **Calendário da B3:** inclui feriados nacionais e móveis de qualquer ano. Feriados municipais de São
   Paulo só fecharam a bolsa até 2021, então compras antigas perto de 25/01 ou 09/07 podem sair com o
   pregão deslocado em um dia.
@@ -240,7 +242,7 @@ Issues e pull requests são bem-vindos, principalmente para:
 
 - importadores para relatórios de outros bancos e corretoras: uma função `parse_<banco>(linhas, data)` e
   uma entrada em `IMPORTERS`, com um teste usando planilha sintética, nunca dados reais;
-- novos tipos de ativo (ações, BDRs, Tesouro Direto);
+- novos tipos de ativo (Tesouro Direto);
 - calendário de feriados da B3 para outros anos.
 
 ## Licença

@@ -60,7 +60,10 @@ class ParseB3(unittest.TestCase):
                 ["Credito", "23/10/2026", "Rendimento", "XPML11 - XP MALLS FDO INV IMOB FII", "CORRETORA", "5", "0.9", "4.5"],
                 ["Credito", "09/09/2026", "Transferência - Liquidação", "XPML11 - XP MALLS FDO INV IMOB FII", "CORRETORA", "3", "106.44", "319.32"],
                 ["Debito", "19/10/2026", "Transferência - Liquidação", "BOVA11 - ISHARES BOVESPA FUNDO DE INDICE", "CORRETORA", "2", "128.99", "257.98"],
-                ["Credito", "19/10/2026", "Transferência - Liquidação", "PETR4 - PETROBRAS PN", "CORRETORA", "10", "38.5", "385"]]
+                ["Credito", "19/10/2026", "Transferência - Liquidação", "DIVD11 - IT NOW IDIV RENDA DIV FDO DE ÍNDICE", "CORRETORA", "2", "10", "20"],
+                ["Credito", "19/10/2026", "Transferência - Liquidação", "PETR4 - PETROBRAS PN", "CORRETORA", "10", "38.5", "385"],
+                ["Credito", "19/10/2026", "Transferência - Liquidação", "B3SA3 - B3 S.A. BRASIL BOLSA BALCAO", "CORRETORA", "10", "12", "120"],
+                ["Credito", "19/10/2026", "Transferência - Liquidação", "AAPL34 - APPLE INC BDR", "CORRETORA", "4", "50", "200"]]
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "movimentacao.xlsx")
             make_xlsx(p, "Movimentação", rows)
@@ -68,9 +71,12 @@ class ParseB3(unittest.TestCase):
         self.assertEqual(entries, [
             {"kind": "ticker", "type": "Fii", "symbol": "XPML11", "qty": 3.0, "date": "2026-09-04", "price": 106.44},
             {"kind": "ticker", "type": "Etf", "symbol": "BOVA11", "qty": 2.0, "date": "2026-10-15", "price": 128.99, "side": "SELL"},
+            {"kind": "ticker", "type": "Etf", "symbol": "DIVD11", "qty": 2.0, "date": "2026-10-15", "price": 10.0},
+            {"kind": "ticker", "type": "Ticker", "symbol": "PETR4", "qty": 10.0, "date": "2026-10-15", "price": 38.5},
+            {"kind": "ticker", "type": "Ticker", "symbol": "B3SA3", "qty": 10.0, "date": "2026-10-15", "price": 12.0},
+            {"kind": "ticker", "type": "StockBdr", "symbol": "AAPL34", "qty": 4.0, "date": "2026-10-15", "price": 50.0},
         ])
-        self.assertEqual(len(skipped), 1)
-        self.assertIn("PETR4", skipped[0])
+        self.assertEqual(skipped, [])
 
 
 class ParseItau(unittest.TestCase):
@@ -121,6 +127,14 @@ class Template(unittest.TestCase):
         self.assertEqual(skipped, [])
         self.assertEqual(entries[0]["price"], 105.2)
 
+    def test_stock_and_bdr_template_types(self):
+        entries, skipped = self.parse_csv(
+            "tipo;ativo;data;quantidade;preco;valor\n"
+            "ACAO;PETR4;01/06/2026;3;38,50;\n"
+            "BDR;AAPL34;01/06/2026;2;50,00;\n")
+        self.assertEqual(skipped, [])
+        self.assertEqual([e["type"] for e in entries], ["Ticker", "StockBdr"])
+
     def test_invalid_lines_are_reported_not_imported(self):
         entries, skipped = self.parse_csv(
             "tipo;ativo;data;quantidade;preco;valor;emissor;indexador;taxa;liquidez_diaria;vencimento\n"
@@ -128,9 +142,10 @@ class Template(unittest.TestCase):
             "CDB;;10/08/2026;;;1000;Banco X;CDI;100;nao;\n"
             "ACAO;PETR4;10/08/2026;10;38;;;;;;\n"
             "FII;XPML11;32/13/2026;1;100;;;;;;\n")
-        self.assertEqual(entries, [])
-        self.assertEqual(len(skipped), 4)
-        for msg, expected in zip(skipped, ["IPCA", "vencimento", "desconhecido", "data invalida"]):
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["symbol"], "PETR4")
+        self.assertEqual(len(skipped), 3)
+        for msg, expected in zip(skipped, ["IPCA", "vencimento", "data invalida"]):
             self.assertIn(expected, msg)
 
     def test_xlsx_template(self):

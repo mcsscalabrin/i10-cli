@@ -21,7 +21,7 @@ por carregamento da aba, e cada operação depois disso custa uma única chamada
 ## Fluxo
 
 1. **Dados.** A ferramenta não depende do banco do usuário. Não presuma qual é: pergunte, se importar.
-   - **FIIs e ETFs, de qualquer banco ou corretora:** peça o Excel da Área do Investidor B3 em
+   - **Ações, BDRs, FIIs e ETFs, de qualquer banco ou corretora:** peça o Excel da Área do Investidor B3 em
      **Extratos → Movimentação**, com período **começando antes da primeira compra**. O período padrão
      cobre só o último mês e omite compras antigas.
    - **Renda fixa e fundos:** não aparecem nesse extrato. Gere a planilha modelo com
@@ -56,7 +56,7 @@ por carregamento da aba, e cada operação depois disso custa uma única chamada
 - **Editar, nunca apagar.** A CLI não tem exclusão. Se o usuário quiser excluir, ele faz pelo site.
 - **Não confie no preço sugerido pelo formulário do site.** Ele já ficou com a cotação do dia em vez da
   data escolhida. Use o `price` do extrato. `price: null` consulta a cotação da data pela API.
-- **Tipos testados no site:** `Fii`, `Etf`, CDB pós-fixado em % do CDI (criar e editar) e fundos
+- **Tipos reconhecidos pelo parser e pela API:** ações (`Ticker`), BDRs (`StockBdr`), `Fii`, `Etf`, CDB pós-fixado em % do CDI e fundos
   (aplicar e resgatar). Para resgate total de fundo, use `"side": "SELL", "qty": "all"`, com `"value"`
   igual ao valor resgatado.
 - **Relatórios mensais de banco em PDF** (por exemplo, o "Relatório de Investimentos" do Itaú): leia o
