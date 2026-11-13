@@ -18,7 +18,7 @@ Comandos:
   install                                      biblioteca window.i10
   plan   <lancamentos.json>                    planeja a sincronizacao (somente leitura)
   apply                                        grava o ultimo plano
-  search <Fund|Fii|Etf> <termo>                busca ativo
+  search <Ticker|StockBdr|Fund|Fii|Etf> <termo> busca ativo
   quote  <tipo> <id> [data]                    cotacao sugerida
   positions [tipos...]                         posicoes da carteira
   entries                                      lancamentos com id, ativo, qtd, preco e data
@@ -39,7 +39,7 @@ Formato do JSON de lancamentos:
      "date": "2026-07-15", "price": null}
   ]
 }
-"type" do ticker: Fii ou Etf (verificados); price null usa a cotacao do site na data;
+"type" do ticker: Ticker, StockBdr, Fii ou Etf (verificados); price null usa a cotacao do site na data;
 "side": "SELL" para venda (ticker e fundo); "id" forca a edicao daquele lancamento.
 Fundo com "side": "SELL" e "qty": "all" vende todas as cotas da carteira; com "value",
 o preco da cota passa a ser value/qty (o valor efetivamente resgatado).
@@ -177,11 +177,16 @@ def minus_business_days(d, n):
 
 def _ticker_type(product):
     p = _norm(product)
-    if "FUNDO DE INDICE" in p or " ETF " in f" {p} ":
+    if "FUNDO DE INDICE" in p or "FDO DE INDICE" in p or " ETF " in f" {p} ":
         return "Etf"
     if "IMOB" in p or " FII" in p:
         return "Fii"
-    return None  # acoes/BDRs: tipo ainda nao mapeado no site
+    symbol = p.split(" - ", 1)[0].strip()
+    if " BDR" in f" {p}" or p.startswith("BDR "):
+        return "StockBdr"
+    if re.fullmatch(r"[A-Z0-9]{4}\d{1,2}", symbol):
+        return "Ticker"
+    return None
 
 
 def parse_b3_movimentacao(rows):
@@ -200,7 +205,7 @@ def parse_b3_movimentacao(rows):
         symbol = product.split(" - ")[0].strip()
         kind = _ticker_type(product)
         if kind is None:
-            skipped.append(f"{symbol}: tipo de ativo nao mapeado (acao/BDR?)")
+            skipped.append(f"{symbol}: tipo de ativo nao mapeado")
             continue
         dd, mm, yy = r[col["DATA"]].split("/")
         trade = minus_business_days(date(int(yy), int(mm), int(dd)), 2)
@@ -264,10 +269,11 @@ def parse_template(rows):
         tipo = _norm(row.get("tipo"))
         try:
             when = _iso_date(row.get("data"))
-            if tipo in ("FII", "ETF"):
+            if tipo in ("ACAO", "BDR", "FII", "ETF"):
                 if not row.get("ativo") or _num(row.get("quantidade")) is None:
-                    raise ValueError("FII/ETF precisa de ativo e quantidade")
-                e = {"kind": "ticker", "type": tipo.title(), "symbol": _norm(row["ativo"]),
+                    raise ValueError(f"{tipo} precisa de ativo e quantidade")
+                ticker_type = {"ACAO": "Ticker", "BDR": "StockBdr", "FII": "Fii", "ETF": "Etf"}[tipo]
+                e = {"kind": "ticker", "type": ticker_type, "symbol": _norm(row["ativo"]),
                      "qty": _num(row["quantidade"]), "date": when, "price": _num(row.get("preco"))}
                 if _norm(row.get("lado")).startswith("V"):
                     e["side"] = "SELL"
@@ -288,7 +294,7 @@ def parse_template(rows):
                 e = {"kind": "fixed", "emitter": row["emissor"], "title": FIXED_TITLES[tipo], "indexer": "CDI",
                      "pct": _num(row["taxa"]), "value": _num(row["valor"]), "date": when, "daily": daily, "due": due}
             else:
-                raise ValueError(f"tipo '{row.get('tipo')}' desconhecido (use FII, ETF, FUNDO ou {', '.join(FIXED_TITLES)})")
+                raise ValueError(f"tipo '{row.get('tipo')}' desconhecido (use ACAO, BDR, FII, ETF, FUNDO ou {', '.join(FIXED_TITLES)})")
         except ValueError as err:
             skipped.append(f"linha {n}: {err}")
             continue
@@ -317,11 +323,11 @@ def _header(rows):
 # Importadores, testados em ordem: (nome, descricao, detecta(abas) -> linhas ou None, parse(linhas, data)).
 IMPORTERS = [
     ("b3-movimentacao",
-     "Area do Investidor B3 > Extratos > Movimentacao (qualquer banco/corretora): FIIs e ETFs com data e preco reais",
+     "Area do Investidor B3 > Extratos > Movimentacao (qualquer banco/corretora): acoes, BDRs, FIIs e ETFs com data e preco reais",
      lambda sheets: next((r for r in sheets.values() if {"MOVIMENTACAO", "PRODUTO"} <= _header(r)), None),
      lambda rows, on_date: parse_b3_movimentacao(rows)),
     ("modelo",
-     "Planilha modelo do i10 (i10 template), CSV ou XLSX: FIIs, ETFs, renda fixa pos-CDI e fundos de qualquer banco",
+     "Planilha modelo do i10 (i10 template), CSV ou XLSX: acoes, BDRs, FIIs, ETFs, renda fixa pos-CDI e fundos de qualquer banco",
      lambda sheets: next((r for r in sheets.values() if {"TIPO", "DATA", "VALOR"} <= _header(r)), None),
      lambda rows, on_date: parse_template(rows)),
     ("itau-produtos",
@@ -690,7 +696,7 @@ def main(argv=None):
     s.set_defaults(fn=cmd_apply)
 
     s = sub.add_parser("search", help="busca ativo")
-    s.add_argument("type", help="Fund, Fii, Etf")
+    s.add_argument("type", help="Ticker, StockBdr, Fund, Fii, Etf")
     s.add_argument("term")
     _js_args(s)
     s.set_defaults(fn=cmd_search)
